@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+.DS_Store
+*.pdf
+*.xlsx
+*.env
+OPENAI_API_KEY*
+rag_validation_report.*
+

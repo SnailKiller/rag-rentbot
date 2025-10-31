@@ -1,0 +1,137 @@
+# backend/rag_pipeline.py
+"""
+RAG 核心流程：文档加载 → 分块 → 向量化 → 检索
+"""
+from typing import List
+import fitz
+from backend.embeddings import build_embeddings, get_embeddings, get_texts, is_fitted
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+import os
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+# ✅ 添加 OpenAI
+from openai import OpenAI
+
+# 初始化 OpenAI 客户端
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),  # 在环境变量中设置
+)
+
+
+# 📄 文本分块器（保守配置）
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=300,      # 每块 300 字符（约 50-100 词）
+    chunk_overlap=50,    # 重叠避免断句
+    separators=["\n\n", "\n", "。", " ", ""]
+)
+
+def extract_text_from_pdf(file_obj) -> str:
+    """
+    使用 PyMuPDF (fitz) 从 PDF 提取文本
+    """
+    file_obj.seek(0)
+    try:
+        doc = fitz.open(stream=file_obj.read(), filetype="pdf")
+        text = ""
+        for page in doc:
+            text += page.get_text()  # 高质量文本提取
+        doc.close()
+        return text.strip()
+    except Exception as e:
+        raise RuntimeError(f"Failed to extract text with PyMuPDF: {e}")
+
+def add_document_from_file(raw_text, file_type: str = "txt"):
+    if file_type == "pdf":
+        text = extract_text_from_pdf(raw_text)
+    else:
+        text = raw_text.strip()
+
+    if not text:
+        raise ValueError("❌ No text extracted from document.")
+
+    print(f"[INFO] 📄 Extracted {len(text)} characters")
+    chunks = text_splitter.split_text(text)
+    print(f"[INFO] 📄 Split into {len(chunks)} chunks")
+
+    build_embeddings(chunks)
+    print(f"[INFO] 🚀 Built knowledge base with {len(chunks)} chunks")
+
+
+def query_rag(question: str, top_k: int = 3) -> str:
+    """
+    RAG: 检索 + 生成（使用 OpenAI API）
+    Args:
+        question: 用户问题
+        top_k: 检索前 k 个相关段落
+    Returns:
+        大模型基于上下文生成的自然语言回答
+    """
+    if not is_fitted():
+        raise RuntimeError("No documents indexed.")
+
+    texts = get_texts()
+    if not texts:
+        return "知识库为空。"
+
+    # 1. 获取查询向量
+    try:
+        query_vec = get_embeddings([question])  # (1, 1024)
+    except Exception as e:
+        return f"❌ 嵌入生成失败（问题）: {str(e)}"
+
+    # 2. 获取所有文本向量
+    try:
+        text_vecs = get_embeddings(texts)       # (n, 1024)
+    except Exception as e:
+        return f"❌ 嵌入生成失败（文档）: {str(e)}"
+
+    # 3. 计算余弦相似度
+    sims = cosine_similarity(query_vec, text_vecs)[0]  # (n,)
+
+    # 4. 取 top-k 最相似的文本
+    top_indices = np.argsort(sims)[-top_k:][::-1]
+    relevant_contexts = [texts[i] for i in top_indices]
+
+    # 5. 拼接上下文
+    context = "\n\n---\n\n".join(relevant_contexts).strip()
+
+    # 6. 构造 Prompt
+    prompt = f"""\
+        你是一个专业的助手，请根据以下提供的上下文内容回答用户的问题。
+
+        请用中文回答，保持简洁、准确、专业。
+
+        <context>
+        {context}
+        </context>
+
+        <question>
+        {question}
+        </question>
+
+        <answer>
+    """
+
+    # 7. 调用 OpenAI 生成回答
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",  # 可改为 "gpt-4" 如果你有权限
+            messages=[
+                {
+                    "role": "system",
+                    "content": "你是一个专业的文档问答助手，只基于提供的上下文回答问题，不要编造信息。"
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.3,
+            max_tokens=512,
+        )
+        # 提取回答
+        answer = response.choices[0].message.content.strip()
+        return answer
+    except Exception as e:
+        return f"❌ 调用 OpenAI 时出错: {str(e)}"

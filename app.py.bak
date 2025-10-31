@@ -1,0 +1,69 @@
+# app.py
+import streamlit as st
+from backend.rag_pipeline import add_document_from_file, query_rag, is_fitted
+
+# 🌟 页面标题
+st.title("📄 Contract Q&A Assistant")
+
+# 💬 对话历史
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "doc_uploaded" not in st.session_state:
+    st.session_state.doc_uploaded = False
+
+# 📂 文件上传区                
+uploaded_file = st.file_uploader("Upload your contract (PDF/TXT)", type=["txt", "pdf"])
+
+if uploaded_file is not None:
+    # 显示文件信息
+    st.write(f"📁 File: `{uploaded_file.name}` ({uploaded_file.type})")
+
+    if st.button("🚀 Index Document"):
+        try:
+            with st.spinner("Extracting text and building knowledge base..."):
+                # ✅ 根据文件类型处理
+                if uploaded_file.name.endswith(".pdf"):
+                    # 传入文件对象，让 extract_text_from_pdf 处理
+                    add_document_from_file(uploaded_file, file_type="pdf")
+                else:
+                    # TXT 文件：直接读取
+                    raw_text = uploaded_file.read().decode("utf-8")
+                    add_document_from_file(raw_text, file_type="txt")
+            
+            st.success("✅ Document indexed successfully!")
+            st.session_state.doc_uploaded = True
+        except Exception as e:
+            st.error(f"❌ Error processing file: {e}")
+
+# ❗ 检查是否已上传
+if not st.session_state.doc_uploaded:
+    st.info("Please upload and index a document to start.")
+else:
+    st.success("✅ Document indexed. You can ask questions now.")
+
+# 💬 聊天界面
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+
+# 用户输入
+if prompt := st.chat_input("Ask about the contract..."):
+    # 显示用户消息
+    with st.chat_message("user"):
+        st.write(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    # 检查是否已索引
+    if not is_fitted():
+        response = "❌ Please upload a document first."
+    else:
+        try:
+            response = query_rag(prompt, top_k=3)
+            # response = "Relevant excerpts:\n\n" + "\n\n".join(f"- {r}" for r in results)
+        except Exception as e:
+            response = f"❌ Error: {str(e)}"
+
+    # 显示助手回复
+    with st.chat_message("assistant"):
+        st.markdown(response)
+    st.session_state.messages.append({"role": "assistant", "content": response})
