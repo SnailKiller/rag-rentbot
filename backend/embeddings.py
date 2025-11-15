@@ -1,9 +1,4 @@
 # backend/embeddings.py
-"""
-轻量级文本向量化模块（基于 HashingVectorizer）
-✅ 无 OOM 风险 | ✅ 内存恒定 | ✅ 无需 fit | ✅ 支持流式处理
-"""
-
 from sklearn.feature_extraction.text import HashingVectorizer
 from typing import List
 import gc
@@ -22,17 +17,9 @@ _vectorizer = HashingVectorizer(
 _texts = []
 
 def build_embeddings(texts: List[str]):
-    """
-    哈希向量化：无需拟合，直接存储文本
-    Args:
-        texts: 文本块列表
-    Returns:
-        None（向量在 transform 时实时生成）
-    """
     global _texts
     print(f"[INFO] 🔹 Received {len(texts)} chunks for indexing (HashingVectorizer)", flush=True)
-    
-    # 清理旧数据（可选）
+
     if _texts:
         print("[INFO] 🧹 Clearing previous text store...", flush=True)
     
@@ -45,11 +32,6 @@ def build_embeddings(texts: List[str]):
 
 
 def get_embeddings(texts: List[str]):
-    """
-    为查询或新文本生成哈希向量
-    Returns:
-        scipy.sparse matrix (n_samples, 1024)
-    """
     if not _texts:
         raise RuntimeError("No documents indexed. Please upload a file first.")
     return _vectorizer.transform(texts)
